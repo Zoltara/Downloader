@@ -1,19 +1,15 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import YTDlpWrap from 'yt-dlp-wrap';
 
-const execAsync = promisify(exec);
-
-// For Vercel, yt-dlp needs to be installed via a layer or custom build
-// Using yt-dlp binary path from environment or default
-const YTDLP_PATH = process.env.YTDLP_PATH || 'yt-dlp';
+// Initialize yt-dlp wrapper
+const ytDlpWrap = new YTDlpWrap();
 
 /**
  * Gets all available formats as JSON
  */
 async function getAllFormats(url) {
     try {
-        const { stdout } = await execAsync(`"${YTDLP_PATH}" -j "${url}"`);
-        return JSON.parse(stdout);
+        const info = await ytDlpWrap.getVideoInfo(url);
+        return info;
     } catch (error) {
         throw new Error(`Failed to extract info: ${error.message}`);
     }

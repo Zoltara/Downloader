@@ -1,7 +1,8 @@
-import { spawn } from 'child_process';
+import YTDlpWrap from 'yt-dlp-wrap';
 import ffmpegPath from 'ffmpeg-static';
 
-const YTDLP_PATH = process.env.YTDLP_PATH || 'yt-dlp';
+// Initialize yt-dlp wrapper
+const ytDlpWrap = new YTDlpWrap();
 
 export default async function handler(req, res) {
     // Enable CORS
@@ -36,7 +37,7 @@ export default async function handler(req, res) {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         
         // Build yt-dlp arguments
-        const args = [url, '-o', '-'];
+        const args = ['-o', '-'];
         if (format) {
             args.push('-f', format);
         }
@@ -46,29 +47,20 @@ export default async function handler(req, res) {
             args.push('--ffmpeg-location', ffmpegPath);
         }
         
-        const ytdlpProcess = spawn(YTDLP_PATH, args);
+        // Execute yt-dlp
+        const ytDlpStream = ytDlpWrap.execStream([url, ...args]);
         
-        ytdlpProcess.stdout.pipe(res);
+        ytDlpStream.pipe(res);
         
-        ytdlpProcess.stderr.on('data', (data) => {
-            console.error(`yt-dlp stderr: ${data}`);
-        });
-        
-        ytdlpProcess.on('error', (error) => {
-            console.error('yt-dlp process error:', error);
+        ytDlpStream.on('error', (error) => {
+            console.error('yt-dlp stream error:', error);
             if (!res.headersSent) {
                 res.status(500).send('Failed to download video');
             }
         });
         
-        ytdlpProcess.on('close', (code) => {
-            if (code !== 0) {
-                console.error(`yt-dlp process exited with code ${code}`);
-            }
-        });
-        
         req.on('close', () => {
-            ytdlpProcess.kill();
+            ytDlpStream.destroy();
         });
         
     } catch (error) {
