@@ -1,0 +1,30 @@
+# Dependencies
+node_modules
+server/node_modules
+
+# Environment
+.env
+.env.local
+
+# Build
+dist-ssr
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+*.test.js
+*.spec.js
+
+# Server files (we use api/ for Vercel)
+server/test-*.js
+server/yt_*.json
