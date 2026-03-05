@@ -2,9 +2,9 @@ import YTDlpWrap from 'yt-dlp-wrap';
 import path from 'path';
 import fs from 'fs';
 
-// Initialize yt-dlp wrapper - use local binary if it exists (for Vercel)
+// Initialize yt-dlp wrapper - check env var, then local bin, then system path
 const binaryPath = path.join(process.cwd(), 'api', 'bin', 'yt-dlp');
-const ytDlpBinary = fs.existsSync(binaryPath) ? binaryPath : 'yt-dlp';
+const ytDlpBinary = process.env.YTDLP_PATH || (fs.existsSync(binaryPath) ? binaryPath : 'yt-dlp');
 const ytDlpWrap = new YTDlpWrap(ytDlpBinary);
 
 /**
