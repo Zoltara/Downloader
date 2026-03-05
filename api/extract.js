@@ -79,14 +79,40 @@ async function ensureYtdlp() {
     return new YTDlpWrap(TMP_BIN_PATH);
 }
 
+const YOUTUBE_RE = /youtube\.com|youtu\.be/i;
+const COOKIE_PATH = path.join('/tmp', 'yt-cookies.txt');
+
+function buildYtdlpArgs(url) {
+    const args = ['--dump-json', '--no-playlist'];
+
+    // tv_embedded + mweb clients don't require a JS runtime and bypass
+    // YouTube's "sign in to confirm you're not a bot" gate on serverless.
+    if (YOUTUBE_RE.test(url)) {
+        args.push('--extractor-args', 'youtube:player_client=tv_embedded,mweb');
+    }
+
+    // Optional: pass YouTube cookies via YOUTUBE_COOKIES env var
+    // Value must be a base64-encoded Netscape-format cookie file.
+    const cookiesB64 = process.env.YOUTUBE_COOKIES;
+    if (cookiesB64) {
+        if (!fs.existsSync(COOKIE_PATH)) {
+            fs.writeFileSync(COOKIE_PATH, Buffer.from(cookiesB64, 'base64').toString('utf-8'));
+        }
+        args.push('--cookies', COOKIE_PATH);
+    }
+
+    return args;
+}
+
 /**
  * Gets all available formats as JSON
  */
 async function getAllFormats(url) {
     const ytDlpWrap = await ensureYtdlp();
     try {
-        const info = await ytDlpWrap.getVideoInfo(url);
-        return info;
+        const args = buildYtdlpArgs(url);
+        const output = await ytDlpWrap.execPromise([url, ...args]);
+        return JSON.parse(output);
     } catch (error) {
         throw new Error(`yt-dlp error: ${error.message}`);
     }

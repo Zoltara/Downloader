@@ -111,9 +111,25 @@ export default async function handler(req, res) {
         res.setHeader('X-Content-Type-Options', 'nosniff');
 
         // Build yt-dlp arguments
-        const args = ['-o', '-'];
+        const args = ['-o', '-', '--no-playlist'];
         if (format) {
             args.push('-f', format);
+        }
+
+        // Use non-JS clients for YouTube to avoid JS runtime errors on serverless
+        const YOUTUBE_RE = /youtube\.com|youtu\.be/i;
+        if (YOUTUBE_RE.test(url)) {
+            args.push('--extractor-args', 'youtube:player_client=tv_embedded,mweb');
+        }
+
+        // Optional cookie support (base64-encoded Netscape cookie file)
+        const cookiesB64 = process.env.YOUTUBE_COOKIES;
+        if (cookiesB64) {
+            const cookiePath = path.join('/tmp', 'yt-cookies.txt');
+            if (!fs.existsSync(cookiePath)) {
+                fs.writeFileSync(cookiePath, Buffer.from(cookiesB64, 'base64').toString('utf-8'));
+            }
+            args.push('--cookies', cookiePath);
         }
 
         // Add ffmpeg location if available
