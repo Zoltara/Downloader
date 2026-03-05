@@ -4,7 +4,29 @@ const YTDlpWrap = require('yt-dlp-wrap');
 import path from 'path';
 import fs from 'fs';
 
-const YTDLP_BIN_PATH = path.join('/tmp', 'yt-dlp');
+const TMP_BIN_PATH = path.join('/tmp', 'yt-dlp');
+
+function resolveBundledPath() {
+    const candidates = [
+        path.join(process.cwd(), 'api', 'bin', 'yt-dlp'),
+        path.join(process.cwd(), 'bin', 'yt-dlp')
+    ];
+
+    return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
+function resolvePreferredYtdlpPath() {
+    const envPath = process.env.YTDLP_PATH;
+    if (envPath && fs.existsSync(envPath)) {
+        return envPath;
+    }
+
+    if (fs.existsSync(TMP_BIN_PATH)) {
+        return TMP_BIN_PATH;
+    }
+
+    return null;
+}
 
 async function downloadBinary(url, dest) {
     const https = await import('https');
@@ -33,21 +55,24 @@ async function downloadBinary(url, dest) {
 }
 
 async function ensureYtdlp() {
-    if (fs.existsSync(YTDLP_BIN_PATH)) return new YTDlpWrap(YTDLP_BIN_PATH);
+    const preferredPath = resolvePreferredYtdlpPath();
+    if (preferredPath) {
+        return new YTDlpWrap(preferredPath);
+    }
 
-    const bundledPath = path.join(process.cwd(), 'api', 'bin', 'yt-dlp');
-    if (fs.existsSync(bundledPath)) {
+    const bundledPath = resolveBundledPath();
+    if (bundledPath) {
         try {
-            fs.copyFileSync(bundledPath, YTDLP_BIN_PATH);
-            fs.chmodSync(YTDLP_BIN_PATH, 0o755);
-            return new YTDlpWrap(YTDLP_BIN_PATH);
+            fs.copyFileSync(bundledPath, TMP_BIN_PATH);
+            fs.chmodSync(TMP_BIN_PATH, 0o755);
+            return new YTDlpWrap(TMP_BIN_PATH);
         } catch (e) { }
     }
 
     console.log('Downloading standalone binary...');
     const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux';
-    await downloadBinary(url, YTDLP_BIN_PATH);
-    return new YTDlpWrap(YTDLP_BIN_PATH);
+    await downloadBinary(url, TMP_BIN_PATH);
+    return new YTDlpWrap(TMP_BIN_PATH);
 }
 
 /**

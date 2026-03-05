@@ -26,11 +26,8 @@ In the import screen:
 **Framework Preset:** Vite
 
 **Build & Development Settings:**
-- **Install Command:**
-  ```bash
-  npm install && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /tmp/yt-dlp && chmod a+rx /tmp/yt-dlp
-  ```
-- **Build Command:** `npm run build` (default)
+- **Install Command:** `npm install`
+- **Build Command:** `npm run vercel-build`
 - **Output Directory:** `dist` (default)
 
 ### 4. Set Environment Variables
@@ -38,7 +35,7 @@ In the import screen:
 Add this environment variable:
 
 **Key:** `YTDLP_PATH`
-**Value:** `/tmp/yt-dlp`
+**Value:** `/var/task/api/bin/yt-dlp`
 
 Important: do not set `VITE_API_URL` in Vercel for production. The frontend now auto-uses `window.location.origin`, so API requests stay on your deployed domain (for example `https://your-app.vercel.app/api/extract`).
 

@@ -112,19 +112,25 @@ Vercel doesn't include yt-dlp and ffmpeg by default. You need to add them:
    - Import your GitHub repository
    - Vercel will auto-detect the Vite framework
 
-3. **Add Build Command**
-   
-   In your Vercel project settings, add this as a custom install command:
+3. **Build settings**
+
+   Keep Vercel defaults (or set these explicitly):
    ```bash
-   npm install && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /tmp/yt-dlp && chmod a+rx /tmp/yt-dlp
+   Install Command: npm install
+   Build Command: npm run vercel-build
+   Output Directory: dist
    ```
+
+   `npm run vercel-build` runs `npm run prepare:ytdlp` and bundles `yt-dlp` into `api/bin` before building the frontend.
 
 4. **Set Environment Variables**
    
    In Vercel project settings → Environment Variables, add:
    ```
-   YTDLP_PATH=/tmp/yt-dlp
+   YTDLP_PATH=/var/task/api/bin/yt-dlp
    ```
+
+   Do not set `VITE_API_URL` in production. The frontend auto-uses same-origin in production, so API calls always target your deployed domain.
 
 5. **Deploy**
    - Click "Deploy"
@@ -185,8 +191,8 @@ downloader/
 
 ## Environment Variables
 
-- `VITE_API_URL`: API endpoint URL (auto-set in production)
-- `YTDLP_PATH`: Path to yt-dlp binary (required for Vercel)
+- `VITE_API_URL`: Optional for local development only
+- `YTDLP_PATH`: Optional override path for yt-dlp binary on serverless runtime
 
 ## Troubleshooting
 
