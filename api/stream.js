@@ -1,6 +1,10 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const YTDlpWrap = require('yt-dlp-wrap');
+const YTDlpWrapModule = require('yt-dlp-wrap');
+const YTDlpWrap =
+    YTDlpWrapModule?.default ||
+    YTDlpWrapModule?.YTDlpWrap ||
+    YTDlpWrapModule;
 import ffmpegPath from 'ffmpeg-static';
 import path from 'path';
 import fs from 'fs';
