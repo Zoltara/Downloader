@@ -10,7 +10,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "vercel-build": "mkdir -p api/bin && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o api/bin/yt-dlp && chmod a+rx api/bin/yt-dlp && npm run build"
+    "vercel-build": "mkdir -p api/bin && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o api/bin/yt-dlp && chmod a+rx api/bin/yt-dlp && npm run build"
   },
   "dependencies": {
     "axios": "^1.13.6",

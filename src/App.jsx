@@ -31,10 +31,7 @@ function App() {
           setResult(data);
         } else {
           setError(data.error || 'The server encountered an error processing the URL.');
-          if (data.details) {
-            console.error('API Error Details:', data.details);
-            console.error('Binary Debug:', { binary: data.binary, exists: data.exists });
-          }
+          setResult(data); // Store the error data in result object to access 'details'
         }
       } else {
         // Handle non-JSON responses (like Vercel 500 pages)
@@ -73,7 +70,12 @@ function App() {
         {loading ? <><span className="loader"></span> Extracting...</> : 'Fetch Media'}
       </button>
 
-      {error && <p style={{ color: '#ef4444', marginTop: '16px' }}>{error}</p>}
+      {error && (
+        <div style={{ color: '#ef4444', marginTop: '16px', fontSize: '0.85rem', textAlign: 'left', background: 'rgba(239, 68, 68, 0.1)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+          <p style={{ fontWeight: 700, marginBottom: '4px' }}>{error}</p>
+          {result?.details && <p style={{ opacity: 0.8, fontSize: '0.75rem', fontFamily: 'monospace' }}>Error: {result.details}</p>}
+        </div>
+      )}
 
       {result && (
         <div className="result-card">

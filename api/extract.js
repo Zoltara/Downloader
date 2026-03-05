@@ -8,34 +8,36 @@ import fs from 'fs';
 const YTDLP_BIN_PATH = path.join('/tmp', 'yt-dlp');
 
 async function ensureYtdlp() {
+    console.log('Checking for yt-dlp binary...');
     // 1. Check if binary already exists in /tmp
     if (fs.existsSync(YTDLP_BIN_PATH)) {
+        console.log('Found binary in /tmp');
         return new YTDlpWrap(YTDLP_BIN_PATH);
     }
 
-    // 2. Check if a pre-bundled binary exists (from our vercel-build script)
+    // 2. Check if a pre-bundled binary exists
     const bundledPath = path.join(process.cwd(), 'api', 'bin', 'yt-dlp');
+    console.log('Checking bundled path:', bundledPath);
     if (fs.existsSync(bundledPath)) {
-        // Copy to /tmp to ensure execution permissions
+        console.log('Found bundled binary, copying to /tmp...');
         try {
             fs.copyFileSync(bundledPath, YTDLP_BIN_PATH);
             fs.chmodSync(YTDLP_BIN_PATH, 0o755);
             return new YTDlpWrap(YTDLP_BIN_PATH);
         } catch (e) {
-            console.warn('Failed to copy bundled binary, will download instead');
+            console.error('Copy/Chmod failed:', e.message);
         }
     }
 
-    // 3. Download if necessary
-    console.log('Downloading yt-dlp binary to /tmp...');
+    // 3. Download if necessary (using standalone linux binary)
+    console.log('Downloading standalone yt-dlp_linux to /tmp...');
     try {
-        await YTDlpWrap.downloadFromGithub(YTDLP_BIN_PATH);
+        await YTDlpWrap.downloadFromGithub(YTDLP_BIN_PATH, 'latest', 'yt-dlp_linux');
         fs.chmodSync(YTDLP_BIN_PATH, 0o755);
         return new YTDlpWrap(YTDLP_BIN_PATH);
     } catch (error) {
-        console.error('Failed to download yt-dlp:', error);
-        // Fallback to system path as last resort
-        return new YTDlpWrap('yt-dlp');
+        console.error('Download failed:', error.message);
+        throw new Error(`Critical: Could not initialize yt-dlp binary: ${error.message}`);
     }
 }
 
