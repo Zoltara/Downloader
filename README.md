@@ -1,8 +1,13 @@
 # Social Media Downloader
 
 A modern web application to download videos from YouTube, TikTok, Instagram, and Facebook in various quality options.
+A mobile-friendly web application for downloading content from popular social media platforms.
 
 ## Features
+- **Instagram**: Download posts, reels, and IGTV videos      (https://snapinsta.to/en)
+- **Facebook**:  Download videos from Facebook               (https://fdown.net/)
+- **TikTok**:    Download TikTok videos                      (https://snaptik.app/en2)
+- **YouTube**:   Download MP3/MP4 audio from YouTube videos  (https://ytmp3.cc/PVvQ/)
 
 - 📹 **Multi-Platform Support**: YouTube, TikTok, Instagram, Facebook
 - 🎬 **High Quality Options**: Up to 4K for YouTube with audio merging
