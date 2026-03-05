@@ -31,6 +31,10 @@ function App() {
           setResult(data);
         } else {
           setError(data.error || 'The server encountered an error processing the URL.');
+          if (data.details) {
+            console.error('API Error Details:', data.details);
+            console.error('Binary Debug:', { binary: data.binary, exists: data.exists });
+          }
         }
       } else {
         // Handle non-JSON responses (like Vercel 500 pages)

@@ -182,6 +182,12 @@ export default async function handler(req, res) {
         res.status(200).json(normalizedInfo);
     } catch (error) {
         console.error('Extraction error:', error);
-        res.status(500).json({ error: 'Failed to extract media information. Please check the URL and try again.' });
+        res.status(500).json({
+            error: 'Failed to extract media information.',
+            details: error.message,
+            binary: ytDlpBinary,
+            path: binaryPath,
+            exists: fs.existsSync(binaryPath)
+        });
     }
 }
