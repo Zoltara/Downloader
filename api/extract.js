@@ -3,20 +3,51 @@ const YTDlpWrap = YTDlpWrapDefault.default || YTDlpWrapDefault;
 import path from 'path';
 import fs from 'fs';
 
-// Initialize yt-dlp wrapper - check env var, then local bin, then system path
-const binaryPath = path.join(process.cwd(), 'api', 'bin', 'yt-dlp');
-const ytDlpBinary = process.env.YTDLP_PATH || (fs.existsSync(binaryPath) ? binaryPath : 'yt-dlp');
-const ytDlpWrap = new YTDlpWrap(ytDlpBinary);
+// Initialize yt-dlp wrapper - Vercel-specific bulletproof setup
+const YTDLP_BIN_PATH = path.join('/tmp', 'yt-dlp');
+
+async function ensureYtdlp() {
+    // 1. Check if binary already exists in /tmp
+    if (fs.existsSync(YTDLP_BIN_PATH)) {
+        return new YTDlpWrap(YTDLP_BIN_PATH);
+    }
+
+    // 2. Check if a pre-bundled binary exists (from our vercel-build script)
+    const bundledPath = path.join(process.cwd(), 'api', 'bin', 'yt-dlp');
+    if (fs.existsSync(bundledPath)) {
+        // Copy to /tmp to ensure execution permissions
+        try {
+            fs.copyFileSync(bundledPath, YTDLP_BIN_PATH);
+            fs.chmodSync(YTDLP_BIN_PATH, 0o755);
+            return new YTDlpWrap(YTDLP_BIN_PATH);
+        } catch (e) {
+            console.warn('Failed to copy bundled binary, will download instead');
+        }
+    }
+
+    // 3. Download if necessary
+    console.log('Downloading yt-dlp binary to /tmp...');
+    try {
+        await YTDlpWrap.downloadFromGithub(YTDLP_BIN_PATH);
+        fs.chmodSync(YTDLP_BIN_PATH, 0o755);
+        return new YTDlpWrap(YTDLP_BIN_PATH);
+    } catch (error) {
+        console.error('Failed to download yt-dlp:', error);
+        // Fallback to system path as last resort
+        return new YTDlpWrap('yt-dlp');
+    }
+}
 
 /**
  * Gets all available formats as JSON
  */
 async function getAllFormats(url) {
+    const ytDlpWrap = await ensureYtdlp();
     try {
         const info = await ytDlpWrap.getVideoInfo(url);
         return info;
     } catch (error) {
-        throw new Error(`Failed to extract info: ${error.message}`);
+        throw new Error(`yt-dlp error: ${error.message}`);
     }
 }
 

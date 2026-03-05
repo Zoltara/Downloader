@@ -4,10 +4,26 @@ import ffmpegPath from 'ffmpeg-static';
 import path from 'path';
 import fs from 'fs';
 
-// Initialize yt-dlp wrapper - check env var, then local bin, then system path
-const binaryPath = path.join(process.cwd(), 'api', 'bin', 'yt-dlp');
-const ytDlpBinary = process.env.YTDLP_PATH || (fs.existsSync(binaryPath) ? binaryPath : 'yt-dlp');
-const ytDlpWrap = new YTDlpWrap(ytDlpBinary);
+const YTDLP_BIN_PATH = path.join('/tmp', 'yt-dlp');
+
+async function ensureYtdlp() {
+    if (fs.existsSync(YTDLP_BIN_PATH)) {
+        return new YTDlpWrap(YTDLP_BIN_PATH);
+    }
+    const bundledPath = path.join(process.cwd(), 'api', 'bin', 'yt-dlp');
+    if (fs.existsSync(bundledPath)) {
+        try {
+            fs.copyFileSync(bundledPath, YTDLP_BIN_PATH);
+            fs.chmodSync(YTDLP_BIN_PATH, 0o755);
+            return new YTDlpWrap(YTDLP_BIN_PATH);
+        } catch (e) {
+            console.warn('Failed to copy bundled binary');
+        }
+    }
+    await YTDlpWrap.downloadFromGithub(YTDLP_BIN_PATH);
+    fs.chmodSync(YTDLP_BIN_PATH, 0o755);
+    return new YTDlpWrap(YTDLP_BIN_PATH);
+}
 
 export default async function handler(req, res) {
     // Enable CORS
@@ -53,6 +69,7 @@ export default async function handler(req, res) {
         }
 
         // Execute yt-dlp
+        const ytDlpWrap = await ensureYtdlp();
         const ytDlpStream = ytDlpWrap.execStream([url, ...args]);
 
         ytDlpStream.pipe(res);
