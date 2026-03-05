@@ -24,14 +24,23 @@ function App() {
         body: JSON.stringify({ url }),
       });
 
-      const data = await response.json();
-      if (response.ok) {
-        setResult(data);
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await response.json();
+        if (response.ok) {
+          setResult(data);
+        } else {
+          setError(data.error || 'The server encountered an error processing the URL.');
+        }
       } else {
-        setError(data.error);
+        // Handle non-JSON responses (like Vercel 500 pages)
+        const text = await response.text();
+        console.error('Non-JSON response:', text.substring(0, 200));
+        setError(`Server Error (${response.status}): The backend function failed. Check Vercel logs.`);
       }
     } catch (err) {
-      setError('Failed to connect to the server. Make sure the backend is running.');
+      console.error('Fetch error:', err);
+      setError('Failed to connect to the server. If this is on Vercel, ensure the API functions are working.');
     } finally {
       setLoading(false);
     }

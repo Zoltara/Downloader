@@ -1,7 +1,11 @@
 import YTDlpWrap from 'yt-dlp-wrap';
+import path from 'path';
+import fs from 'fs';
 
-// Initialize yt-dlp wrapper
-const ytDlpWrap = new YTDlpWrap();
+// Initialize yt-dlp wrapper - use local binary if it exists (for Vercel)
+const binaryPath = path.join(process.cwd(), 'api', 'bin', 'yt-dlp');
+const ytDlpBinary = fs.existsSync(binaryPath) ? binaryPath : 'yt-dlp';
+const ytDlpWrap = new YTDlpWrap(ytDlpBinary);
 
 /**
  * Gets all available formats as JSON
@@ -20,17 +24,17 @@ export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    
+
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
-    
+
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method not allowed' });
     }
 
     const { url } = req.body;
-    
+
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
     }
@@ -54,13 +58,15 @@ export default async function handler(req, res) {
         const platformLower = platform.toLowerCase();
         const isTikTok = platformLower === 'tiktok';
         const isYouTube = platformLower === 'youtube';
-        const apiBaseUrl = process.env.VERCEL_URL 
-            ? `https://${process.env.VERCEL_URL}` 
-            : (req.headers['x-forwarded-host'] ? `https://${req.headers['x-forwarded-host']}` : 'http://localhost:5000');
+
+        // Generate base URL for API endpoints
+        const protocol = req.headers['x-forwarded-proto'] || 'http';
+        const host = req.headers['host'];
+        const apiBaseUrl = `${protocol}://${host}`;
 
         if (info.formats) {
             console.log(`Processing ${info.formats.length} formats for ${platform}...`);
-            
+
             normalizedInfo.formats = info.formats
                 .filter(f => {
                     if (!f.url) return false;
@@ -78,7 +84,7 @@ export default async function handler(req, res) {
                 .map(f => {
                     const isCombined = f.acodec !== 'none' && f.vcodec !== 'none';
                     const isVideoOnly = f.vcodec !== 'none' && f.acodec === 'none';
-                    
+
                     let downloadUrl;
                     if (isTikTok) {
                         const streamParams = new URLSearchParams({
@@ -101,14 +107,14 @@ export default async function handler(req, res) {
                     const height = f.height || 0;
                     const resolution = f.resolution || `${f.width}x${f.height}` || '';
                     let qualityLabel = f.format_note || resolution;
-                    
+
                     if (height >= 2160) qualityLabel = '4K (2160p)';
                     else if (height >= 1440) qualityLabel = '1440p';
                     else if (height >= 1080) qualityLabel = '1080p';
                     else if (height >= 720) qualityLabel = '720p (HD)';
                     else if (height >= 480) qualityLabel = '480p';
                     else if (height >= 360) qualityLabel = '360p';
-                    
+
                     return {
                         url: downloadUrl,
                         ext: f.ext,
@@ -127,7 +133,7 @@ export default async function handler(req, res) {
                     if (b.height !== a.height) return b.height - a.height;
                     return (b.isCombined ? 1 : 0) - (a.isCombined ? 1 : 0);
                 });
-            
+
             // For YouTube, add merged format options
             if (isYouTube) {
                 const videoOnlyFormats = normalizedInfo.formats.filter(f => f.isVideoOnly && f.formatId);
@@ -138,7 +144,7 @@ export default async function handler(req, res) {
                         format: mergeFormat,
                         filename: `${normalizedInfo.title}_${f.note}.mp4`.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').replace(/[^\x00-\x7F]/g, '')
                     });
-                    
+
                     return {
                         url: `${apiBaseUrl}/api/stream?${streamParams.toString()}`,
                         ext: 'mp4',
@@ -153,7 +159,7 @@ export default async function handler(req, res) {
                         filesize: null
                     };
                 });
-                
+
                 normalizedInfo.formats = [...mergedFormats, ...normalizedInfo.formats];
             }
         }
