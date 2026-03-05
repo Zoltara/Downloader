@@ -7,22 +7,44 @@ import fs from 'fs';
 
 const YTDLP_BIN_PATH = path.join('/tmp', 'yt-dlp');
 
+async function downloadBinary(url, dest) {
+    const https = await import('https');
+    return new Promise((resolve, reject) => {
+        const file = fs.createWriteStream(dest);
+        https.get(url, (response) => {
+            if (response.statusCode === 302 || response.statusCode === 301) {
+                downloadBinary(response.headers.location, dest).then(resolve).catch(reject);
+                return;
+            }
+            if (response.statusCode !== 200) {
+                reject(new Error(`Failed to download: ${response.statusCode}`));
+                return;
+            }
+            response.pipe(file);
+            file.on('finish', () => {
+                file.close();
+                fs.chmodSync(dest, 0o755);
+                resolve();
+            });
+        }).on('error', (err) => {
+            fs.unlinkSync(dest);
+            reject(err);
+        });
+    });
+}
+
 async function ensureYtdlp() {
-    if (fs.existsSync(YTDLP_BIN_PATH)) {
-        return new YTDlpWrap(YTDLP_BIN_PATH);
-    }
+    if (fs.existsSync(YTDLP_BIN_PATH)) return new YTDlpWrap(YTDLP_BIN_PATH);
     const bundledPath = path.join(process.cwd(), 'api', 'bin', 'yt-dlp');
     if (fs.existsSync(bundledPath)) {
         try {
             fs.copyFileSync(bundledPath, YTDLP_BIN_PATH);
             fs.chmodSync(YTDLP_BIN_PATH, 0o755);
             return new YTDlpWrap(YTDLP_BIN_PATH);
-        } catch (e) {
-            console.warn('Failed to copy bundled binary');
-        }
+        } catch (e) { }
     }
-    await YTDlpWrap.downloadFromGithub(YTDLP_BIN_PATH);
-    fs.chmodSync(YTDLP_BIN_PATH, 0o755);
+    const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux';
+    await downloadBinary(url, YTDLP_BIN_PATH);
     return new YTDlpWrap(YTDLP_BIN_PATH);
 }
 
