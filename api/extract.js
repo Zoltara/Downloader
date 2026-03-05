@@ -1,5 +1,6 @@
-import YTDlpWrapDefault from 'yt-dlp-wrap';
-const YTDlpWrap = YTDlpWrapDefault.default || YTDlpWrapDefault;
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const YTDlpWrap = require('yt-dlp-wrap');
 import path from 'path';
 import fs from 'fs';
 
@@ -216,9 +217,12 @@ export default async function handler(req, res) {
         res.status(500).json({
             error: 'Failed to extract media information.',
             details: error.message,
-            binary: ytDlpBinary,
-            path: binaryPath,
-            exists: fs.existsSync(binaryPath)
+            stack: error.stack
         });
     }
 }
+
+// Increase timeout for info extraction (max 5 minutes)
+export const config = {
+    maxDuration: 300,
+};

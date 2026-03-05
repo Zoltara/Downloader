@@ -39,12 +39,12 @@ function App() {
       } else {
         // Handle non-JSON responses (like Vercel 500 pages)
         const text = await response.text();
-        console.error('Non-JSON response:', text.substring(0, 200));
-        setError(`Server Error (${response.status}): The backend function failed. Check Vercel logs.`);
+        console.error('Non-JSON response:', text.substring(0, 500));
+        setError(`Server Error (${response.status}): ${text.substring(0, 100)}... Check Vercel logs.`);
       }
     } catch (err) {
       console.error('Fetch error:', err);
-      setError('Failed to connect to the server. If this is on Vercel, ensure the API functions are working.');
+      setError(`Connection Error: ${err.message}. Ensure the API is deployed.`);
     } finally {
       setLoading(false);
     }
