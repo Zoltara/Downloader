@@ -40,6 +40,8 @@ Add this environment variable:
 **Key:** `YTDLP_PATH`
 **Value:** `/tmp/yt-dlp`
 
+Important: do not set `VITE_API_URL` in Vercel for production. The frontend now auto-uses `window.location.origin`, so API requests stay on your deployed domain (for example `https://your-app.vercel.app/api/extract`).
+
 ### 5. Deploy
 
 Click "Deploy" and wait for the build to complete (2-3 minutes).

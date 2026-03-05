@@ -63,6 +63,39 @@ async function getAllFormats(url) {
     }
 }
 
+async function readJsonBody(req) {
+    if (req.body && typeof req.body === 'object') {
+        return req.body;
+    }
+
+    if (typeof req.body === 'string') {
+        try {
+            return JSON.parse(req.body);
+        } catch {
+            return {};
+        }
+    }
+
+    if (!req.body && req.readable) {
+        return await new Promise((resolve) => {
+            let raw = '';
+            req.on('data', (chunk) => {
+                raw += chunk;
+            });
+            req.on('end', () => {
+                try {
+                    resolve(raw ? JSON.parse(raw) : {});
+                } catch {
+                    resolve({});
+                }
+            });
+            req.on('error', () => resolve({}));
+        });
+    }
+
+    return {};
+}
+
 export default async function handler(req, res) {
     // Enable CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -77,7 +110,8 @@ export default async function handler(req, res) {
         return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    const { url } = req.body;
+    const body = await readJsonBody(req);
+    const { url } = body;
 
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });

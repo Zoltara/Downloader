@@ -1,7 +1,17 @@
 import { useState } from 'react'
 
-// API URL from environment variable or default to localhost
-const API_URL = import.meta.env.VITE_API_URL || window.location.origin;
+function getApiBaseUrl() {
+  const configuredUrl = import.meta.env.VITE_API_URL?.trim()
+
+  // In deployed builds, always target this app's own domain so users are not sent to localhost.
+  if (import.meta.env.PROD) {
+    return window.location.origin
+  }
+
+  return configuredUrl || 'http://localhost:5000'
+}
+
+const API_URL = getApiBaseUrl()
 
 function App() {
   const [url, setUrl] = useState('')
