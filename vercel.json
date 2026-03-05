@@ -8,9 +8,7 @@
   "functions": {
     "api/**/*.js": {
       "maxDuration": 300,
-      "includeFiles": [
-        "api/bin/yt-dlp"
-      ]
+      "includeFiles": "api/bin/yt-dlp"
     }
   },
   "rewrites": [
