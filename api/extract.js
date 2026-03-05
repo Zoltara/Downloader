@@ -1,4 +1,5 @@
-import YTDlpWrap from 'yt-dlp-wrap';
+import YTDlpWrapDefault from 'yt-dlp-wrap';
+const YTDlpWrap = YTDlpWrapDefault.default || YTDlpWrapDefault;
 import path from 'path';
 import fs from 'fs';
 
