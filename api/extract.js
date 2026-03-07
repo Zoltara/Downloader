@@ -85,33 +85,18 @@ const INSTAGRAM_RE = /instagram\.com/i;
 const COOKIE_PATH = path.join('/tmp', 'yt-cookies.txt');
 const IG_COOKIE_PATH = path.join('/tmp', 'ig-cookies.txt');
 
-// ─── YouTube fallback chain ────────────────────────────────────────────────
-// When yt-dlp is blocked by bot detection on Vercel datacenter IPs, we fall
-// back to community-run proxies (Piped → Invidious) that fetch streams from
-// YouTube using their own trusted infrastructure.
-//
-// Both APIs are queried with axios (reliable in serverless) and each has
-// multiple instances for redundancy.
+// ─── YouTube fallback: Cobalt API ─────────────────────────────────────────
+// When yt-dlp is blocked by YouTube bot detection on Vercel datacenter IPs,
+// we fall back to Cobalt — an open-source media downloader that handles
+// YouTube through its own infrastructure and returns signed tunnel URLs.
+// Cobalt URLs are NOT raw Google CDN URLs, so they work from any IP.
+// https://github.com/imputnet/cobalt
 
-const PIPED_INSTANCES = [
-    'https://pipedapi.kavin.rocks',
-    'https://pipedapi.adminforge.de',
-    'https://api.piped.yt',
-    'https://pipedapi.in.projectsegfau.lt',
-    'https://piped-api.privacy.com.de',
-    'https://pipedapi.tokhmi.xyz',
-];
-
-// Invidious is a separate open-source YouTube frontend with its own API.
-// formatStreams = combined audio+video (ready to download, up to 720p).
-// adaptiveFormats = separate video/audio streams (higher quality).
-const INVIDIOUS_INSTANCES = [
-    'https://invidious.privacyredirect.com',
-    'https://invidious.jing.rocks',
-    'https://inv.tux.pizza',
-    'https://invidious.fdn.fr',
-    'https://invidious.nerdvpn.de',
-    'https://yewtu.be',
+const COBALT_ENDPOINTS = [
+    'https://api.cobalt.tools',
+    'https://cobalt.api.timelessnesses.me',
+    'https://cobalt-api.ayo.tf',
+    'https://cobalt.floofy.dev',
 ];
 
 function extractYouTubeId(url) {
@@ -119,248 +104,123 @@ function extractYouTubeId(url) {
     return match ? match[1] : null;
 }
 
-async function tryAxiosGet(url) {
-    const resp = await axios.get(url, {
-        headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
-        timeout: 9000,
+const HEIGHT_LABELS = {
+    2160: '4K (2160p)', 1440: '1440p', 1080: '1080p',
+    720: '720p (HD)', 480: '480p', 360: '360p', 240: '240p', 144: '144p',
+};
+const heightLabel = (h) => HEIGHT_LABELS[h] || (h ? `${h}p` : 'Best Quality');
+
+async function cobaltPost(endpoint, body) {
+    const resp = await axios.post(`${endpoint}/`, body, {
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        timeout: 15000,
         validateStatus: (s) => s === 200,
     });
-    return resp.data;
+    const d = resp.data;
+    if (d.status === 'error') throw new Error(d.error?.code || 'Cobalt error');
+    if (!['tunnel', 'redirect', 'stream'].includes(d.status)) throw new Error(`Unexpected cobalt status: ${d.status}`);
+    if (!d.url) throw new Error('No URL in Cobalt response');
+    return d;
 }
 
-async function fetchFromPiped(videoId) {
+async function cobaltRequest(body) {
     let lastError;
-    for (const instance of PIPED_INSTANCES) {
+    for (const endpoint of COBALT_ENDPOINTS) {
         try {
-            const data = await tryAxiosGet(`${instance}/streams/${videoId}`);
-            if (data.error) throw new Error(data.error);
-            if (!data.videoStreams?.length && !data.audioStreams?.length) throw new Error('Empty response');
-            console.log(`Piped success via ${instance}`);
-            return data;
+            const result = await cobaltPost(endpoint, body);
+            console.log(`Cobalt success via ${endpoint}`);
+            return result;
         } catch (e) {
-            console.warn(`Piped instance ${instance} failed: ${e.message}`);
+            console.warn(`Cobalt ${endpoint} failed: ${e.message}`);
             lastError = e;
         }
     }
-    throw lastError || new Error('All Piped instances failed');
+    throw lastError || new Error('All Cobalt endpoints failed');
 }
 
-async function fetchFromInvidious(videoId) {
-    let lastError;
-    for (const instance of INVIDIOUS_INSTANCES) {
-        try {
-            const data = await tryAxiosGet(`${instance}/api/v1/videos/${videoId}?fields=title,author,lengthSeconds,videoThumbnails,formatStreams,adaptiveFormats`);
-            if (data.error) throw new Error(data.error);
-            if (!data.formatStreams?.length && !data.adaptiveFormats?.length) throw new Error('Empty response');
-            console.log(`Invidious success via ${instance}`);
-            return data;
-        } catch (e) {
-            console.warn(`Invidious instance ${instance} failed: ${e.message}`);
-            lastError = e;
+async function fetchYouTubeFallback(videoId, originalUrl) {
+    // Fire all quality requests + audio in parallel for multiple download choices
+    const qualities = ['1080', '720', '480', '360'];
+    const tasks = [
+        ...qualities.map(q =>
+            cobaltRequest({ url: originalUrl, videoQuality: q, downloadMode: 'auto', filenameStyle: 'pretty' })
+                .then(d => ({ type: 'video', quality: q, data: d }))
+                .catch(() => null)
+        ),
+        cobaltRequest({ url: originalUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'pretty' })
+            .then(d => ({ type: 'audio', data: d }))
+            .catch(() => null),
+    ];
+
+    const results = (await Promise.all(tasks)).filter(Boolean);
+    if (results.length === 0) throw new Error('All Cobalt endpoints failed for all qualities');
+
+    let title = 'YouTube Video';
+    const formats = [];
+    const seenUrls = new Set();
+
+    for (const r of results) {
+        const d = r.data;
+        if (!d?.url || seenUrls.has(d.url)) continue;
+        seenUrls.add(d.url);
+
+        // Cobalt filenames look like "Title - 1080p - cobalt.mp4"
+        if (d.filename && title === 'YouTube Video') {
+            title = d.filename
+                .replace(/\s*[-_]\s*\d+p.*$/i, '')
+                .replace(/\s*[-_]\s*cobalt.*$/i, '')
+                .replace(/\.[^.]+$/, '')
+                .trim() || title;
         }
-    }
-    throw lastError || new Error('All Invidious instances failed');
-}
 
-const heightLabel = (h) => {
-    if (h >= 2160) return '4K (2160p)';
-    if (h >= 1440) return '1440p';
-    if (h >= 1080) return '1080p';
-    if (h >= 720) return '720p (HD)';
-    if (h >= 480) return '480p';
-    if (h >= 360) return '360p';
-    return h ? `${h}p` : 'Unknown';
-};
-
-function buildResponseFromPiped(pipedData, originalUrl, apiBaseUrl) {
-    const rawTitle = pipedData.title || 'YouTube Video';
-    const safeTitle = rawTitle
-        .replace(/[\\\/:*?"<>|]/g, '_')
-        .replace(/\s+/g, '_')
-        .replace(/[^\x00-\x7F]/g, '');
-
-    const formats = [];
-
-    for (const vs of (pipedData.videoStreams || [])) {
-        if (!vs.url || !vs.height) continue;
-        const ext = vs.mimeType?.includes('webm') ? 'webm' : 'mp4';
-        const label = heightLabel(vs.height);
-        const proxyParams = new URLSearchParams({
-            url: vs.url,
-            platform: 'Youtube',
-            filename: `${safeTitle}_${label}.${ext}`,
-        });
-        formats.push({
-            url: `${apiBaseUrl}/api/proxy?${proxyParams.toString()}`,
-            ext,
-            note: label + (vs.videoOnly ? ' (video only)' : ''),
-            vcodec: vs.codec || 'avc1',
-            acodec: vs.videoOnly ? 'none' : 'mp4a',
-            isCombined: !vs.videoOnly,
-            isVideoOnly: !!vs.videoOnly,
-            height: vs.height,
-            resolution: `${vs.width}x${vs.height}`,
-            filesize: vs.contentLength || null,
-            formatId: null,
-        });
-    }
-
-    for (const as of (pipedData.audioStreams || [])) {
-        if (!as.url) continue;
-        const ext = as.mimeType?.includes('webm') ? 'webm' : 'm4a';
-        const kbps = Math.round((as.bitrate || 0) / 1000);
-        const proxyParams = new URLSearchParams({
-            url: as.url,
-            platform: 'Youtube',
-            filename: `${safeTitle}_audio_${kbps}kbps.${ext}`,
-        });
-        formats.push({
-            url: `${apiBaseUrl}/api/proxy?${proxyParams.toString()}`,
-            ext,
-            note: `Audio ${kbps}kbps`,
-            vcodec: 'none',
-            acodec: as.codec || 'mp4a',
-            isCombined: false,
-            isVideoOnly: false,
-            height: 0,
-            resolution: '',
-            filesize: as.contentLength || null,
-            formatId: null,
-        });
-    }
-
-    formats.sort((a, b) => {
-        if (b.height !== a.height) return b.height - a.height;
-        return (b.isCombined ? 1 : 0) - (a.isCombined ? 1 : 0);
-    });
-
-    return {
-        title: rawTitle,
-        thumbnail: pipedData.thumbnailUrl,
-        duration: pipedData.duration,
-        uploader: pipedData.uploader,
-        url: originalUrl,
-        platform: 'Youtube',
-        formats,
-        _source: 'piped',
-    };
-}
-
-function buildResponseFromInvidious(invData, originalUrl, apiBaseUrl) {
-    const rawTitle = invData.title || 'YouTube Video';
-    const safeTitle = rawTitle
-        .replace(/[\\\/:*?"<>|]/g, '_')
-        .replace(/\s+/g, '_')
-        .replace(/[^\x00-\x7F]/g, '');
-
-    const formats = [];
-    const thumb = invData.videoThumbnails?.find(t => t.quality === 'maxresdefault')?.url
-        || invData.videoThumbnails?.[0]?.url;
-
-    // formatStreams = combined audio+video (720p and below) — best for direct download
-    for (const f of (invData.formatStreams || [])) {
-        if (!f.url) continue;
-        const heightMatch = f.resolution?.match(/(\d+)/);
-        const h = heightMatch ? parseInt(heightMatch[1], 10) : 0;
-        const ext = f.container || 'mp4';
-        const label = heightLabel(h);
-        const proxyParams = new URLSearchParams({
-            url: f.url,
-            platform: 'Youtube',
-            filename: `${safeTitle}_${label}.${ext}`,
-        });
-        formats.push({
-            url: `${apiBaseUrl}/api/proxy?${proxyParams.toString()}`,
-            ext,
-            note: label,
-            vcodec: f.encoding || 'avc1',
-            acodec: 'mp4a',
-            isCombined: true,
-            isVideoOnly: false,
-            height: h,
-            resolution: f.resolution || '',
-            filesize: null,
-            formatId: null,
-        });
-    }
-
-    // adaptiveFormats = video-only or audio-only streams (higher quality)
-    for (const f of (invData.adaptiveFormats || [])) {
-        if (!f.url) continue;
-        const isVideo = f.type?.startsWith('video/');
-        const isAudio = f.type?.startsWith('audio/');
-        if (!isVideo && !isAudio) continue;
-
-        const h = f.resolution ? parseInt(f.resolution, 10) : 0;
-        const mimeBase = f.type?.split(';')[0] || '';
-        const ext = mimeBase.includes('webm') ? 'webm' : (isAudio ? 'm4a' : 'mp4');
-
-        let label, note;
-        if (isAudio) {
-            const kbps = Math.round((f.bitrate || 0) / 1000);
-            label = `audio_${kbps}kbps`;
-            note = `Audio ${kbps}kbps`;
+        if (r.type === 'video') {
+            const h = parseInt(r.quality, 10);
+            formats.push({
+                url: d.url,   // cobalt tunnel URL — works from any IP, no proxy needed
+                ext: 'mp4',
+                note: heightLabel(h),
+                vcodec: 'avc1',
+                acodec: 'mp4a',
+                isCombined: true,
+                isVideoOnly: false,
+                height: h,
+                resolution: `${r.quality}p`,
+                filesize: null,
+                formatId: null,
+            });
         } else {
-            label = heightLabel(h);
-            note = `${label} (video only)`;
+            formats.push({
+                url: d.url,
+                ext: 'mp3',
+                note: 'Audio Only (MP3)',
+                vcodec: 'none',
+                acodec: 'mp3',
+                isCombined: false,
+                isVideoOnly: false,
+                height: 0,
+                resolution: '',
+                filesize: null,
+                formatId: null,
+            });
         }
-
-        const proxyParams = new URLSearchParams({
-            url: f.url,
-            platform: 'Youtube',
-            filename: `${safeTitle}_${label}.${ext}`,
-        });
-        formats.push({
-            url: `${apiBaseUrl}/api/proxy?${proxyParams.toString()}`,
-            ext,
-            note,
-            vcodec: isVideo ? (f.encoding || 'avc1') : 'none',
-            acodec: isAudio ? (f.encoding || 'mp4a') : 'none',
-            isCombined: false,
-            isVideoOnly: isVideo,
-            height: isVideo ? h : 0,
-            resolution: f.resolution || '',
-            filesize: f.contentLength ? parseInt(f.contentLength, 10) : null,
-            formatId: null,
-        });
     }
 
-    formats.sort((a, b) => {
-        if (b.height !== a.height) return b.height - a.height;
-        return (b.isCombined ? 1 : 0) - (a.isCombined ? 1 : 0);
-    });
+    if (formats.length === 0) throw new Error('Cobalt returned no usable formats');
+    formats.sort((a, b) => b.height - a.height);
 
     return {
-        title: rawTitle,
-        thumbnail: thumb,
-        duration: invData.lengthSeconds,
-        uploader: invData.author,
+        title,
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+        duration: null,
+        uploader: null,
         url: originalUrl,
         platform: 'Youtube',
         formats,
-        _source: 'invidious',
+        _source: 'cobalt',
     };
 }
 
-async function fetchYouTubeFallback(videoId, originalUrl, apiBaseUrl) {
-    // Try Piped first
-    try {
-        const pipedData = await fetchFromPiped(videoId);
-        const result = buildResponseFromPiped(pipedData, originalUrl, apiBaseUrl);
-        if (result.formats.length > 0) return result;
-        throw new Error('Piped returned no usable formats');
-    } catch (e) {
-        console.warn(`Piped fallback failed: ${e.message}. Trying Invidious...`);
-    }
-
-    // Try Invidious second
-    const invData = await fetchFromInvidious(videoId);
-    const result = buildResponseFromInvidious(invData, originalUrl, apiBaseUrl);
-    if (result.formats.length === 0) throw new Error('Invidious returned no usable formats');
-    return result;
-}
-
-// ─── end YouTube fallback chain ────────────────────────────────────────────
+// ─── end YouTube fallback ──────────────────────────────────────────────────
 
 function buildYtdlpArgs(url) {
     const args = ['--dump-json', '--no-playlist'];
@@ -478,7 +338,7 @@ export default async function handler(req, res) {
                 if (videoId) {
                     console.log(`yt-dlp failed for YouTube (${ytdlpError.message.slice(0, 80)}). Trying Piped/Invidious fallback...`);
                     try {
-                        const result = await fetchYouTubeFallback(videoId, url, apiBaseUrl);
+                        const result = await fetchYouTubeFallback(videoId, url);
                         console.log(`YouTube fallback succeeded (source: ${result._source}). ${result.formats.length} formats returned.`);
                         return res.status(200).json(result);
                     } catch (fallbackError) {
