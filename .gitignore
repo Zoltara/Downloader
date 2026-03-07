@@ -19,6 +19,9 @@ dist-ssr
 # Vercel
 .vercel
 
+# yt-dlp binary (downloaded fresh during build via scripts/prepare-ytdlp.mjs)
+api/bin/yt-dlp
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -116,13 +116,15 @@ export default async function handler(req, res) {
             args.push('-f', format);
         }
 
-        // Use non-JS clients for YouTube to avoid JS runtime errors on serverless
+        // mweb is the most resilient client for serverless without cookies.
+        // ios/android are kept as fallbacks. tv_embedded was removed in newer yt-dlp.
         const YOUTUBE_RE = /youtube\.com|youtu\.be/i;
+        const INSTAGRAM_RE = /instagram\.com/i;
         if (YOUTUBE_RE.test(url)) {
-            args.push('--extractor-args', 'youtube:player_client=tv_embedded,mweb');
+            args.push('--extractor-args', 'youtube:player_client=mweb,ios,android');
         }
 
-        // Optional cookie support (base64-encoded Netscape cookie file)
+        // Optional YouTube cookie support (base64-encoded Netscape cookie file)
         const cookiesB64 = process.env.YOUTUBE_COOKIES;
         if (cookiesB64) {
             const cookiePath = path.join('/tmp', 'yt-cookies.txt');
@@ -130,6 +132,16 @@ export default async function handler(req, res) {
                 fs.writeFileSync(cookiePath, Buffer.from(cookiesB64, 'base64').toString('utf-8'));
             }
             args.push('--cookies', cookiePath);
+        }
+
+        // Optional Instagram cookie support (base64-encoded Netscape cookie file)
+        const igCookiesB64 = process.env.INSTAGRAM_COOKIES;
+        if (igCookiesB64 && INSTAGRAM_RE.test(url)) {
+            const igCookiePath = path.join('/tmp', 'ig-cookies.txt');
+            if (!fs.existsSync(igCookiePath)) {
+                fs.writeFileSync(igCookiePath, Buffer.from(igCookiesB64, 'base64').toString('utf-8'));
+            }
+            args.push('--cookies', igCookiePath);
         }
 
         // Add ffmpeg location if available

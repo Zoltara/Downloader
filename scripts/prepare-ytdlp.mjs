@@ -45,13 +45,13 @@ function downloadFile(url, dest) {
 async function main() {
   fs.mkdirSync(BIN_DIR, { recursive: true });
 
+  // Always download the latest binary to ensure yt-dlp is up-to-date.
+  // Stale binaries cause extractor failures (YouTube bot detection, removed clients, etc.)
   if (fs.existsSync(BIN_PATH)) {
-    fs.chmodSync(BIN_PATH, 0o755);
-    console.log(`yt-dlp already present at ${BIN_PATH}`);
-    return;
+    fs.unlinkSync(BIN_PATH);
   }
 
-  console.log(`Downloading yt-dlp to ${BIN_PATH} ...`);
+  console.log(`Downloading latest yt-dlp to ${BIN_PATH} ...`);
   await downloadFile(SOURCE_URL, BIN_PATH);
   console.log('yt-dlp prepared successfully.');
 }
