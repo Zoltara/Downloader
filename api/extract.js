@@ -84,6 +84,125 @@ const INSTAGRAM_RE = /instagram\.com/i;
 const COOKIE_PATH = path.join('/tmp', 'yt-cookies.txt');
 const IG_COOKIE_PATH = path.join('/tmp', 'ig-cookies.txt');
 
+// Piped is an open-source YouTube frontend whose API returns direct CDN stream
+// URLs. It is used as a fallback when yt-dlp is blocked by YouTube bot detection
+// on datacenter IPs (Vercel). Multiple instances for redundancy.
+const PIPED_INSTANCES = [
+    'https://pipedapi.kavin.rocks',
+    'https://pipedapi.tokhmi.xyz',
+    'https://api.piped.yt',
+    'https://pipedapi.moomoo.me',
+];
+
+function extractYouTubeId(url) {
+    const match = url.match(/(?:v=|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    return match ? match[1] : null;
+}
+
+async function fetchFromPiped(videoId) {
+    let lastError;
+    for (const instance of PIPED_INSTANCES) {
+        try {
+            const resp = await fetch(`${instance}/streams/${videoId}`, {
+                headers: { Accept: 'application/json' },
+                signal: AbortSignal.timeout(8000),
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                return data;
+            }
+        } catch (e) {
+            lastError = e;
+        }
+    }
+    throw lastError || new Error('All Piped instances failed');
+}
+
+function buildResponseFromPiped(pipedData, originalUrl, apiBaseUrl) {
+    const rawTitle = pipedData.title || 'YouTube Video';
+    const safeTitle = rawTitle
+        .replace(/[\\\/:*?"<>|]/g, '_')
+        .replace(/\s+/g, '_')
+        .replace(/[^\x00-\x7F]/g, '');
+
+    const formats = [];
+
+    const heightLabel = (h) => {
+        if (h >= 2160) return '4K (2160p)';
+        if (h >= 1440) return '1440p';
+        if (h >= 1080) return '1080p';
+        if (h >= 720) return '720p (HD)';
+        if (h >= 480) return '480p';
+        if (h >= 360) return '360p';
+        return `${h}p`;
+    };
+
+    for (const vs of (pipedData.videoStreams || [])) {
+        if (!vs.url || !vs.height) continue;
+        const ext = vs.mimeType?.includes('webm') ? 'webm' : 'mp4';
+        const label = heightLabel(vs.height);
+        const proxyParams = new URLSearchParams({
+            url: vs.url,
+            platform: 'Youtube',
+            filename: `${safeTitle}_${label}.${ext}`,
+        });
+        formats.push({
+            url: `${apiBaseUrl}/api/proxy?${proxyParams.toString()}`,
+            ext,
+            note: label + (vs.videoOnly ? ' (video only)' : ''),
+            vcodec: vs.codec || 'avc1',
+            acodec: vs.videoOnly ? 'none' : 'mp4a',
+            isCombined: !vs.videoOnly,
+            isVideoOnly: !!vs.videoOnly,
+            height: vs.height,
+            resolution: `${vs.width}x${vs.height}`,
+            filesize: null,
+            formatId: null,
+        });
+    }
+
+    for (const as of (pipedData.audioStreams || [])) {
+        if (!as.url) continue;
+        const ext = as.mimeType?.includes('webm') ? 'webm' : 'm4a';
+        const kbps = Math.round((as.bitrate || 0) / 1000);
+        const proxyParams = new URLSearchParams({
+            url: as.url,
+            platform: 'Youtube',
+            filename: `${safeTitle}_audio_${kbps}kbps.${ext}`,
+        });
+        formats.push({
+            url: `${apiBaseUrl}/api/proxy?${proxyParams.toString()}`,
+            ext,
+            note: `Audio ${kbps}kbps`,
+            vcodec: 'none',
+            acodec: as.codec || 'mp4a',
+            isCombined: false,
+            isVideoOnly: false,
+            height: 0,
+            resolution: '',
+            filesize: null,
+            formatId: null,
+        });
+    }
+
+    formats.sort((a, b) => {
+        if (b.height !== a.height) return b.height - a.height;
+        return (b.isCombined ? 1 : 0) - (a.isCombined ? 1 : 0);
+    });
+
+    return {
+        title: rawTitle,
+        thumbnail: pipedData.thumbnailUrl,
+        duration: pipedData.duration,
+        uploader: pipedData.uploader,
+        url: originalUrl,
+        platform: 'Youtube',
+        formats,
+        _source: 'piped',
+    };
+}
+
 function buildYtdlpArgs(url) {
     const args = ['--dump-json', '--no-playlist'];
 
@@ -184,8 +303,34 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'URL is required' });
     }
 
+    const protocol = req.headers['x-forwarded-proto'] || 'http';
+    const host = req.headers['host'];
+    const apiBaseUrl = `${protocol}://${host}`;
+
     try {
-        const info = await getAllFormats(url);
+        let info;
+        try {
+            info = await getAllFormats(url);
+        } catch (ytdlpError) {
+            // YouTube bot detection is common on datacenter IPs. Fall back to
+            // the Piped API which fetches stream URLs server-side from residential infrastructure.
+            if (YOUTUBE_RE.test(url)) {
+                const videoId = extractYouTubeId(url);
+                if (videoId) {
+                    console.log(`yt-dlp failed for YouTube (${ytdlpError.message.slice(0, 80)}). Trying Piped API fallback...`);
+                    try {
+                        const pipedData = await fetchFromPiped(videoId);
+                        const result = buildResponseFromPiped(pipedData, url, apiBaseUrl);
+                        console.log(`Piped fallback succeeded. ${result.formats.length} formats returned.`);
+                        return res.status(200).json(result);
+                    } catch (pipedError) {
+                        console.error('Piped fallback failed:', pipedError.message);
+                    }
+                }
+            }
+            throw ytdlpError;
+        }
+
         const platform = info.extractor_key || '';
         console.log(`Extracted info for ${url}. Platform: ${platform}`);
 
@@ -204,10 +349,7 @@ export default async function handler(req, res) {
         const isTikTok = platformLower === 'tiktok';
         const isYouTube = platformLower === 'youtube';
 
-        // Generate base URL for API endpoints
-        const protocol = req.headers['x-forwarded-proto'] || 'http';
-        const host = req.headers['host'];
-        const apiBaseUrl = `${protocol}://${host}`;
+        // apiBaseUrl is computed above (before the try block)
 
         if (info.formats) {
             console.log(`Processing ${info.formats.length} formats for ${platform}...`);

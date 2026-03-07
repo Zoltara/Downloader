@@ -53,6 +53,9 @@ export default async function handler(req, res) {
             headers['Referer'] = 'https://www.instagram.com/';
         } else if (platformLower === 'facebook' || url.includes('facebook.com')) {
             headers['Referer'] = 'https://www.facebook.com/';
+        } else if (platformLower === 'youtube' || url.includes('googlevideo.com')) {
+            headers['Referer'] = 'https://www.youtube.com/';
+            headers['Origin'] = 'https://www.youtube.com';
         }
 
         console.log(`Proxying download: ${filename || 'file'} (Platform: ${platform || 'unknown'})`);
