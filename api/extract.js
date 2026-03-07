@@ -7,6 +7,7 @@ const YTDlpWrap =
     YTDlpWrapModule;
 import path from 'path';
 import fs from 'fs';
+import axios from 'axios';
 
 const TMP_BIN_PATH = path.join('/tmp', 'yt-dlp');
 
@@ -84,14 +85,33 @@ const INSTAGRAM_RE = /instagram\.com/i;
 const COOKIE_PATH = path.join('/tmp', 'yt-cookies.txt');
 const IG_COOKIE_PATH = path.join('/tmp', 'ig-cookies.txt');
 
-// Piped is an open-source YouTube frontend whose API returns direct CDN stream
-// URLs. It is used as a fallback when yt-dlp is blocked by YouTube bot detection
-// on datacenter IPs (Vercel). Multiple instances for redundancy.
+// ─── YouTube fallback chain ────────────────────────────────────────────────
+// When yt-dlp is blocked by bot detection on Vercel datacenter IPs, we fall
+// back to community-run proxies (Piped → Invidious) that fetch streams from
+// YouTube using their own trusted infrastructure.
+//
+// Both APIs are queried with axios (reliable in serverless) and each has
+// multiple instances for redundancy.
+
 const PIPED_INSTANCES = [
     'https://pipedapi.kavin.rocks',
-    'https://pipedapi.tokhmi.xyz',
+    'https://pipedapi.adminforge.de',
     'https://api.piped.yt',
-    'https://pipedapi.moomoo.me',
+    'https://pipedapi.in.projectsegfau.lt',
+    'https://piped-api.privacy.com.de',
+    'https://pipedapi.tokhmi.xyz',
+];
+
+// Invidious is a separate open-source YouTube frontend with its own API.
+// formatStreams = combined audio+video (ready to download, up to 720p).
+// adaptiveFormats = separate video/audio streams (higher quality).
+const INVIDIOUS_INSTANCES = [
+    'https://invidious.privacyredirect.com',
+    'https://invidious.jing.rocks',
+    'https://inv.tux.pizza',
+    'https://invidious.fdn.fr',
+    'https://invidious.nerdvpn.de',
+    'https://yewtu.be',
 ];
 
 function extractYouTubeId(url) {
@@ -99,25 +119,58 @@ function extractYouTubeId(url) {
     return match ? match[1] : null;
 }
 
+async function tryAxiosGet(url) {
+    const resp = await axios.get(url, {
+        headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+        timeout: 9000,
+        validateStatus: (s) => s === 200,
+    });
+    return resp.data;
+}
+
 async function fetchFromPiped(videoId) {
     let lastError;
     for (const instance of PIPED_INSTANCES) {
         try {
-            const resp = await fetch(`${instance}/streams/${videoId}`, {
-                headers: { Accept: 'application/json' },
-                signal: AbortSignal.timeout(8000),
-            });
-            if (resp.ok) {
-                const data = await resp.json();
-                if (data.error) throw new Error(data.error);
-                return data;
-            }
+            const data = await tryAxiosGet(`${instance}/streams/${videoId}`);
+            if (data.error) throw new Error(data.error);
+            if (!data.videoStreams?.length && !data.audioStreams?.length) throw new Error('Empty response');
+            console.log(`Piped success via ${instance}`);
+            return data;
         } catch (e) {
+            console.warn(`Piped instance ${instance} failed: ${e.message}`);
             lastError = e;
         }
     }
     throw lastError || new Error('All Piped instances failed');
 }
+
+async function fetchFromInvidious(videoId) {
+    let lastError;
+    for (const instance of INVIDIOUS_INSTANCES) {
+        try {
+            const data = await tryAxiosGet(`${instance}/api/v1/videos/${videoId}?fields=title,author,lengthSeconds,videoThumbnails,formatStreams,adaptiveFormats`);
+            if (data.error) throw new Error(data.error);
+            if (!data.formatStreams?.length && !data.adaptiveFormats?.length) throw new Error('Empty response');
+            console.log(`Invidious success via ${instance}`);
+            return data;
+        } catch (e) {
+            console.warn(`Invidious instance ${instance} failed: ${e.message}`);
+            lastError = e;
+        }
+    }
+    throw lastError || new Error('All Invidious instances failed');
+}
+
+const heightLabel = (h) => {
+    if (h >= 2160) return '4K (2160p)';
+    if (h >= 1440) return '1440p';
+    if (h >= 1080) return '1080p';
+    if (h >= 720) return '720p (HD)';
+    if (h >= 480) return '480p';
+    if (h >= 360) return '360p';
+    return h ? `${h}p` : 'Unknown';
+};
 
 function buildResponseFromPiped(pipedData, originalUrl, apiBaseUrl) {
     const rawTitle = pipedData.title || 'YouTube Video';
@@ -127,16 +180,6 @@ function buildResponseFromPiped(pipedData, originalUrl, apiBaseUrl) {
         .replace(/[^\x00-\x7F]/g, '');
 
     const formats = [];
-
-    const heightLabel = (h) => {
-        if (h >= 2160) return '4K (2160p)';
-        if (h >= 1440) return '1440p';
-        if (h >= 1080) return '1080p';
-        if (h >= 720) return '720p (HD)';
-        if (h >= 480) return '480p';
-        if (h >= 360) return '360p';
-        return `${h}p`;
-    };
 
     for (const vs of (pipedData.videoStreams || [])) {
         if (!vs.url || !vs.height) continue;
@@ -157,7 +200,7 @@ function buildResponseFromPiped(pipedData, originalUrl, apiBaseUrl) {
             isVideoOnly: !!vs.videoOnly,
             height: vs.height,
             resolution: `${vs.width}x${vs.height}`,
-            filesize: null,
+            filesize: vs.contentLength || null,
             formatId: null,
         });
     }
@@ -181,7 +224,7 @@ function buildResponseFromPiped(pipedData, originalUrl, apiBaseUrl) {
             isVideoOnly: false,
             height: 0,
             resolution: '',
-            filesize: null,
+            filesize: as.contentLength || null,
             formatId: null,
         });
     }
@@ -202,6 +245,122 @@ function buildResponseFromPiped(pipedData, originalUrl, apiBaseUrl) {
         _source: 'piped',
     };
 }
+
+function buildResponseFromInvidious(invData, originalUrl, apiBaseUrl) {
+    const rawTitle = invData.title || 'YouTube Video';
+    const safeTitle = rawTitle
+        .replace(/[\\\/:*?"<>|]/g, '_')
+        .replace(/\s+/g, '_')
+        .replace(/[^\x00-\x7F]/g, '');
+
+    const formats = [];
+    const thumb = invData.videoThumbnails?.find(t => t.quality === 'maxresdefault')?.url
+        || invData.videoThumbnails?.[0]?.url;
+
+    // formatStreams = combined audio+video (720p and below) — best for direct download
+    for (const f of (invData.formatStreams || [])) {
+        if (!f.url) continue;
+        const heightMatch = f.resolution?.match(/(\d+)/);
+        const h = heightMatch ? parseInt(heightMatch[1], 10) : 0;
+        const ext = f.container || 'mp4';
+        const label = heightLabel(h);
+        const proxyParams = new URLSearchParams({
+            url: f.url,
+            platform: 'Youtube',
+            filename: `${safeTitle}_${label}.${ext}`,
+        });
+        formats.push({
+            url: `${apiBaseUrl}/api/proxy?${proxyParams.toString()}`,
+            ext,
+            note: label,
+            vcodec: f.encoding || 'avc1',
+            acodec: 'mp4a',
+            isCombined: true,
+            isVideoOnly: false,
+            height: h,
+            resolution: f.resolution || '',
+            filesize: null,
+            formatId: null,
+        });
+    }
+
+    // adaptiveFormats = video-only or audio-only streams (higher quality)
+    for (const f of (invData.adaptiveFormats || [])) {
+        if (!f.url) continue;
+        const isVideo = f.type?.startsWith('video/');
+        const isAudio = f.type?.startsWith('audio/');
+        if (!isVideo && !isAudio) continue;
+
+        const h = f.resolution ? parseInt(f.resolution, 10) : 0;
+        const mimeBase = f.type?.split(';')[0] || '';
+        const ext = mimeBase.includes('webm') ? 'webm' : (isAudio ? 'm4a' : 'mp4');
+
+        let label, note;
+        if (isAudio) {
+            const kbps = Math.round((f.bitrate || 0) / 1000);
+            label = `audio_${kbps}kbps`;
+            note = `Audio ${kbps}kbps`;
+        } else {
+            label = heightLabel(h);
+            note = `${label} (video only)`;
+        }
+
+        const proxyParams = new URLSearchParams({
+            url: f.url,
+            platform: 'Youtube',
+            filename: `${safeTitle}_${label}.${ext}`,
+        });
+        formats.push({
+            url: `${apiBaseUrl}/api/proxy?${proxyParams.toString()}`,
+            ext,
+            note,
+            vcodec: isVideo ? (f.encoding || 'avc1') : 'none',
+            acodec: isAudio ? (f.encoding || 'mp4a') : 'none',
+            isCombined: false,
+            isVideoOnly: isVideo,
+            height: isVideo ? h : 0,
+            resolution: f.resolution || '',
+            filesize: f.contentLength ? parseInt(f.contentLength, 10) : null,
+            formatId: null,
+        });
+    }
+
+    formats.sort((a, b) => {
+        if (b.height !== a.height) return b.height - a.height;
+        return (b.isCombined ? 1 : 0) - (a.isCombined ? 1 : 0);
+    });
+
+    return {
+        title: rawTitle,
+        thumbnail: thumb,
+        duration: invData.lengthSeconds,
+        uploader: invData.author,
+        url: originalUrl,
+        platform: 'Youtube',
+        formats,
+        _source: 'invidious',
+    };
+}
+
+async function fetchYouTubeFallback(videoId, originalUrl, apiBaseUrl) {
+    // Try Piped first
+    try {
+        const pipedData = await fetchFromPiped(videoId);
+        const result = buildResponseFromPiped(pipedData, originalUrl, apiBaseUrl);
+        if (result.formats.length > 0) return result;
+        throw new Error('Piped returned no usable formats');
+    } catch (e) {
+        console.warn(`Piped fallback failed: ${e.message}. Trying Invidious...`);
+    }
+
+    // Try Invidious second
+    const invData = await fetchFromInvidious(videoId);
+    const result = buildResponseFromInvidious(invData, originalUrl, apiBaseUrl);
+    if (result.formats.length === 0) throw new Error('Invidious returned no usable formats');
+    return result;
+}
+
+// ─── end YouTube fallback chain ────────────────────────────────────────────
 
 function buildYtdlpArgs(url) {
     const args = ['--dump-json', '--no-playlist'];
@@ -317,14 +476,13 @@ export default async function handler(req, res) {
             if (YOUTUBE_RE.test(url)) {
                 const videoId = extractYouTubeId(url);
                 if (videoId) {
-                    console.log(`yt-dlp failed for YouTube (${ytdlpError.message.slice(0, 80)}). Trying Piped API fallback...`);
+                    console.log(`yt-dlp failed for YouTube (${ytdlpError.message.slice(0, 80)}). Trying Piped/Invidious fallback...`);
                     try {
-                        const pipedData = await fetchFromPiped(videoId);
-                        const result = buildResponseFromPiped(pipedData, url, apiBaseUrl);
-                        console.log(`Piped fallback succeeded. ${result.formats.length} formats returned.`);
+                        const result = await fetchYouTubeFallback(videoId, url, apiBaseUrl);
+                        console.log(`YouTube fallback succeeded (source: ${result._source}). ${result.formats.length} formats returned.`);
                         return res.status(200).json(result);
-                    } catch (pipedError) {
-                        console.error('Piped fallback failed:', pipedError.message);
+                    } catch (fallbackError) {
+                        console.error('All YouTube fallbacks failed:', fallbackError.message);
                     }
                 }
             }
